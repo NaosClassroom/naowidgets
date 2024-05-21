@@ -3,14 +3,50 @@ import traceback
 
 import ipywidgets as widgets
 from IPython.display import display
-from IPython.display import Javascript
 
-def set_toggle_cb(toggle_button, async_func):
+###########################
+# A few general utilities
+
+def as_widget(func):
+    "Decorator that immediatly runs a top-level coroutine and shows it's result in a widget."
+    log_widget = widgets.HTML(
+        layout={'width': '99%'}
+    )
+    
+    def _log(*args, color='black'):
+        log_messages = ''
+        lines = " ".join(map(str, args))
+        for line in lines.split('\n'):
+            log_messages += f'<span style="color: {color};">{line}</span>\n'
+        log_widget.value += f'<pre style="font-family: monospace; margin: 0;">{log_messages}</pre>'
+        
+    async def wrapped():
+        try:
+            await func(_log)
+        except Exception:
+            err_msg = traceback.format_exc()
+            _log(err_msg, color='red')
+            
+    task = asyncio.ensure_future(wrapped())
+    display(log_widget)
+
+def show(fut):
+    """For one-line calls to NAOqi functions, so the output is captured and shown in a text widget.
+
+    usage:
+    show(nao.ALTextToSpeech.getLanguage())
+
+    Only use this as the top-level in a notebook.
+    """
+    async def func(print):
+        print(await fut)
+    return as_widget(func)
+
+###########################
+# More specific widgets for motion control
+
+def _set_toggle_cb(toggle_button, async_func):
     toggle_button.observe(lambda c: asyncio.create_task(async_func(c.new)), 'value')
-
-def set_click_cb(button, async_func):
-    button.on_click(lambda b: asyncio.create_task(async_func()))
-
 
 class StiffnessToggle:
     def __init__(self, nao, joints, label):
@@ -19,7 +55,7 @@ class StiffnessToggle:
         self.label = label
         self.button = widgets.ToggleButton(value=False)
         self.widget = self.button
-        set_toggle_cb(self.button, self.set_stiffness_async)
+        _set_toggle_cb(self.button, self.set_stiffness_async)
 
     async def init_async(self):
         stiffs = await self.nao.ALMotion.getStiffnesses(self.joints[0])
@@ -39,7 +75,7 @@ class HandToggle:
         self.hand = hand
         self.button = widgets.ToggleButton(value=False)
         self.widget = self.button
-        set_toggle_cb(self.button, self.set_hand_open_async)
+        _set_toggle_cb(self.button, self.set_hand_open_async)
 
     async def init_async(self):
         angles = await self.nao.ALMotion.getAngles(self.hand, True)
@@ -86,7 +122,7 @@ class PoseSaver:
         self.update_pose_display()
 
     def clear_poses(self, _):
-        self.poses = []
+        del self.poses[:]
         self.update_pose_display()
 
     async def replay_async(self, delay_between, fraction_speed):
@@ -165,6 +201,7 @@ class NaoArmController:
         self.stiffness_control = StiffnessToggle(nao, arm_joints, f"{arm_side}Arm")
         self.hand_control = HandToggle(nao, f"{arm_side}Hand")
         self.pose_saver = PoseSaver(nao, self.all_arm_joints)
+        self.poses = self.pose_saver.poses
 
         # Banner
         self.banner = make_banner(f"{side_name} Arm Controller")
@@ -213,6 +250,7 @@ class NaoTorsoController:
         self.right_hand_control = HandToggle(nao, 'RHand')
         self.head_stiffness = StiffnessToggle(nao, head_joints, "Head")
         self.pose_saver = PoseSaver(nao, self.all_joints)
+        self.poses = self.pose_saver.poses
 
         # Banner
         self.banner = make_banner("Torso Controller")
@@ -249,27 +287,4 @@ class NaoTorsoController:
             self.head_stiffness.set_stiffness_async(True)
         )
         await self.pose_saver.replay_async(delay_between, fraction_speed)
-
-
-def as_widget(func):
-    log_widget = widgets.HTML(
-        layout={'width': '99%'}
-    )
-    
-    def log(*args, color='black'):
-        log_messages = ''
-        lines = " ".join(map(str, args))
-        for line in lines.split('\n'):
-            log_messages += f'<span style="color: {color};">{line}</span>\n'
-        log_widget.value += f'<pre style="font-family: monospace; margin: 0;">{log_messages}</pre>'
-        
-    async def wrapped():
-        try:
-            await func(log)
-        except Exception:
-            err_msg = traceback.format_exc()
-            log(err_msg, color='red')
-            
-    task = asyncio.ensure_future(wrapped())
-    display(log_widget)
 
